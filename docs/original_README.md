@@ -1,160 +1,104 @@
-# Tema 1 ASC - Optimizarea Inmultirii Matricelor
+# Computer Systems Architecture Assignment 1 -- Matrix Multiplication Optimization
 
-## Descriere Generala
-Acest proiect contine trei implementari diferite pentru rezolvarea unei ecuatii
-cu matrice si vectori, avand scopul de a evidentia diferentele de performanta
-dintre un cod scris de mana neoptimizat, unul scris folosind biblioteca BLAS si
-unul optimizat manual prin tehnici de imbunatatire a accesului la memorie.
+## Overview
 
-Ecuatia implementata este:
+This project contains three implementations of a matrix/vector computation. It compares an unoptimized handwritten implementation, a BLAS implementation and a manually optimized implementation focused on memory access.
+
+The implemented equations are:
+
+```text
 C = At * B
 D = C * Ct
-y = D * (suma pe linii a lui C) + x
+y = D * (row sums of C) + x
+```
 
-## Explicatii Implementari
+Here, `At` and `Ct` denote the transposes of A and C.
 
-### 1. Varianta Neoptimizata (solver_neopt.c)
-Aceasta este implementarea de referinta. 
-Pentru prima inmultire, C = At * B, am calculat elementele direct folosind 3
-bucle for. Pentru a evita transpunerea fizica a matricei A in memorie, am tinut
-cont de transpusa modificand indicii de acces din A[i][k] in A[k][i] (adica
-A[k * N + i] liniarizat).
+## Implementation details
 
-Pentru calculul matricei D = C * Ct, m-am folosit de cerinta din enunt care
-precizeaza ca D este o matrice simetrica. Astfel, am calculat doar elementele
-de pe diagonala principala si cele de deasupra ei (j <= i), dupa care am
-copiat rezultatul in pozitia simetrica D[j * N + i] = intermediate_sum. Asta a
-injumatatit numarul de calcule necesare pentru matricea D.
+### 1. Unoptimized implementation (`solver_neopt.c`)
 
-Apoi am calculat sumele pe liniile matricei C intr-un vector separat, am
-inmultit D cu acest vector si la final am adunat vectorul x.
+This is the reference implementation. The first multiplication, C = At * B, uses three nested loops. Instead of physically transposing A, the code accesses A[k][i], or `A[k * N + i]` in linear storage.
 
-### 2. Varianta BLAS (solver_blas.c)
-Pentru aceasta varianta am folosit functiile din biblioteca cblas pentru o
-eficienta maxima.
-- Alocarile le-am facut cu calloc.
-- Pentru C = At * B am folosit cblas_dgemm. Am setat parametrul TransA pe
-  CblasTrans pentru a inmulti direct pe A transpusa, fara sa o transpun eu in
-  prealabil.
-- Pentru D = C * Ct am apelat cblas_dsyrk (Symmetric rank-k update). Este o
-  functie super optimizata care tine cont automat de faptul ca matricea
-  rezultata D este simetrica, calculand si scriind doar in partea superioara
-  a ei (CblasUpper).
-- Am insumat liniile lui C intr-un vector intermediar v folosind repetat
-  cblas_daxpy.
-- Am copiat vectorul x in y cu cblas_dcopy pentru a avea baza rezultatului.
-- La final, am inmultit matricea simetrica D cu vectorul obtinut si l-am
-  adunat in y folosind cblas_dsymv, profitand din nou de simetria lui D.
+For D = C * Ct, the implementation exploits the symmetry specified in the assignment. It computes the main diagonal and one triangle (`j <= i`), then copies each result to the symmetric position using `D[j * N + i] = intermediate_sum`. This roughly halves the computations required for D.
 
-### 3. Varianta Optimizata manual (solver_opt.c)
-Aceasta varianta imbunatateste varianta neopt exclusiv prin modificari la
-nivel de cod. Pentru a creste performanta, am aplicat urmatoarele tehnici:
-- Block Matrix Multiplication (BMM): Am impartit inmultirea matricelor in
-  blocuri de dimensiune 40x40 (B_SIZE = 40). Asta creste enorm localitatea
-  spatiala si temporala a datelor in memoria cache L1. In loc sa se aduca
-  date noi la fiecare iteratie pentru toata matricea N, elementele sunt
-  tinute in cache cat timp se lucreaza pe blocul respectiv.
-- Loop Unrolling: In buclele interioare am grupat pasii cate 4 (j += 4).
-  Asta reduce numarul de salturi (branches) evaluate de procesor si permite
-  executarea mai multor instructiuni aritmetice in paralel.
-- Keyword-ul register si pointeri: Am precalculat adresele de inceput de rand
-  folosind pointeri locali (ex: c_row = &C[i * N]), evitand inmultirile
-  costisitoare la fiecare pas din bucla. Variabilele foarte folosite au fost
-  declarate cu register pentru a sugera compilatorului sa le tina in
-  registrii procesorului, scazand numarul de accesari la memorie.
+Next, the row sums of C are stored in a separate vector. D is multiplied by this vector, and x is added to the result.
 
-## Analiza Performantei (Valgrind Cachegrind si Memcheck)
+### 2. BLAS implementation (`solver_blas.c`)
 
-Din rularea Valgrind Memcheck pe input_valgrind reiese ca toate cele 3
-variante elibereaza complet memoria alocata (0 errors, 0 leaks), fara
-probleme de acces (segfault-uri sau citiri neinitializate).
+This version uses CBLAS functions:
 
-Analizand output-urile de la Cachegrind, diferentele sunt majore:
+- Memory is allocated using `calloc`.
+- `cblas_dgemm` computes C = At * B. Setting `TransA` to `CblasTrans` avoids a separate transpose.
+- `cblas_dsyrk` computes D = C * Ct, exploiting symmetry and writing only the upper triangle (`CblasUpper`).
+- Repeated `cblas_daxpy` calls accumulate the rows of C into the intermediate vector v.
+- `cblas_dcopy` copies x into y.
+- `cblas_dsymv` multiplies symmetric matrix D by the intermediate vector and adds the result to y.
 
-1. Numarul de instructiuni (I refs):
-- Neopt ruleaza in jur de 3.55 miliarde de instructiuni.
-- Opt_m reduce acest numar la 1.40 miliarde. Loop unrolling-ul si pointerii
-  calculati in prealabil au scazut instructiunile necesare la mai putin
-  de jumatate.
-- BLAS foloseste doar 83 de milioane, demonstrand avantajul instructiunilor
-  vectoriale din biblioteca precompilata.
+### 3. Manually optimized implementation (`solver_opt.c`)
 
-2. Accese la date si miss rate (D1 misses):
-- Neopt are un miss rate in cache-ul L1 de date (D1 miss rate) destul de
-  mare, de 6.7% (aprox. 132 milioane misses absoulte). Accesarea pe coloane
-  face ca datele din cache sa se invalideze rapid.
-- Opt_m scade acest miss rate spectaculos, la doar 0.2% (doar 781 mii misses).
-  Impartirea in blocuri de 40x40 garanteaza ca datele incap in cache-ul L1
-  si sunt refolosite eficient inainte sa fie inlocuite.
+This version improves the baseline through code-level changes:
 
-3. Branches:
-- Datorita unrolling-ului, numarul de branches in Opt_m a scazut masiv fata
-  de Neopt (20 milioane fata de 97 milioane). Chiar daca mispredict rate-ul
-  a crescut la 8% pe Opt_m, numarul total mult mai mic de branches si de
-  instructiuni rezulta intr-un timp de executie mult mai bun.
+- **Blocked matrix multiplication:** 40-by-40 blocks (`B_SIZE = 40`) improve spatial and temporal locality, allowing data to be reused while processing a block.
+- **Loop unrolling:** inner-loop iterations are grouped in fours (`j += 4`), reducing loop branches and allowing more arithmetic instructions to be scheduled together.
+- **Local pointers and the register keyword:** row-start addresses are precomputed, for example `c_row = &C[i * N]`, to avoid repeated index calculations. Frequently used variables are declared with `register` as a suggestion to the compiler; actual register allocation remains the compiler's decision.
 
-## Bonus: Analiza comparativa Haswell vs. UCSX
+## Performance analysis: Valgrind Cachegrind and Memcheck
 
-Comparand rularea Opt_m pe Haswell fata de UCSX din fisierele cache generate:
-- Pe Haswell, varianta Opt_m a avut 781,524 D1 misses.
-- Pe UCSX, aceeasi varianta a avut 705,909 D1 misses (un miss rate usor
-  imbunatatit, de la 0.18% la 0.14%).
-Acest lucru sugereaza o arhitectura de cache superioara pe nodurile UCSX
-(fie cache L1 mai mare, fie politici de prefetching mai agresive care
-favorizeaza accesul blocat). Numarul de instructiuni (I refs) ramane practic
-identic intre cele doua arhitecturi (~1.4 miliarde), diferenta de
-performanta fiind data strict de ierarhia de memorie.
+Memcheck runs on `input_valgrind` reported zero errors and zero memory leaks for all three implementations. All allocated memory was released, with no invalid accesses or uninitialized reads reported.
 
+### 1. Instruction references (`I refs`)
 
-## Grafice si Timpi de Executie
+- The baseline executes approximately 3.55 billion instructions.
+- The manually optimized version reduces this to approximately 1.40 billion. Unrolling and precomputed pointers reduce the required instructions to less than half.
+- BLAS executes approximately 83 million instructions, illustrating the efficiency of the precompiled library's optimized implementation.
 
-Am rulat testele pe mai multe dimensiuni (N intre 400 si 1800) ca sa vad cum
-se comporta variantele. Iata ce a reiesit din cele 13 grafice:
+### 2. Data accesses and L1 data-cache misses
 
-### 1. Performanta generala si scalabilitatea
-- **timpi_neopt_blas_opt.png**: Aici se vede cat de lenta e varianta neopt 
-  (ajunge la ~13.6s pt N=1200). Codul meu (opt_m) reduce timpul la vreo 3.5s,
-  in timp ce BLAS termina totul instant in 0.17s.
-- **scalare_opt_m.png**: M-am uitat doar la opt_m pana la N=1800. Se 
-  observa clar forma de O(N^3) a algoritmului, timpul crescand progresiv de 
-  la 0.15s la 11.6s pentru cea mai mare matrice.
+- The baseline has a D1 miss rate of 6.7%, approximately 132 million misses. Column-wise access leads to poor locality.
+- The manually optimized version reduces the miss rate to approximately 0.2%, or 781 thousand misses. Blocking improves reuse of data in the cache.
 
-### 2. Analiza memoriei si a instructiunilor (Cachegrind)
-- **acces_memorie_drefs.png**: Neopt face enorm de multe accese la memorie 
-  (aproape 2 miliarde pt N=400). Folosind variabile register si pointeri in 
-  opt_m, am reusit sa scad numarul asta de vreo 4 ori (la 471M).
-- **misses_l1_l3_variante.png**: Avand mult mai putine accese, automat si 
-  rateurile in L1 au scazut imens: de la 132 de milioane in neopt, la sub 
-  un milion in opt_m.
-- **rate_miss_si_branch.png**: Graficul asta arata exact compromisul facut
-  in opt_m. Rata de L1 miss scade dramatic de la 6.7% la 0.2%, dar din cauza
-  unrolling-ului am stricat putin branch prediction-ul (a crescut de la 0.3%
-  la 8%). Per total, a meritat clar sacrificiul.
+### 3. Branches
 
-### 3. Bonus: Comparatie arhitecturi (Haswell vs UCSX) - Timpi
-Am rulat testele si pe coada UCSX ca sa vad diferenta de hardware.
+Unrolling reduces the optimized version's branch count from approximately 97 million to 20 million. Although its branch misprediction rate increases to approximately 8%, the lower total branch and instruction counts accompany a much shorter execution time.
 
-- **arhitecturi_timpi_global.png**: Reprezentarea cu linii arata clar cum 
-  toate variantele sunt mai rapide pe UCSX, indiferent de marimea matricei.
-- **arhitecturi_grupate_n.png**: Forma cu bare evidentiaza diferenta uriasa
-  la teste mari. La N=1800, neopt scade de la ~50s pe Haswell la ~37s pe UCSX.
-- **optimizat_haswell_vs_ucsx.png**: Acelasi avantaj se pastreaza si la
-  varianta mea optimizata (8.6s pe UCSX vs 11.9s pe Haswell pentru N=1800).
-- **speedup_ucsx_opt_m.png**: Graficul arata de cate ori e mai rapid UCSX
-  fata de Haswell pe codul optimizat. De la N=1200 in sus, treaba se
-  stabilizeaza la un speedup de cam 1.35x - 1.39x.
+## Bonus: Haswell versus UCSX
 
-### 4. Bonus: Comparatie arhitecturi - Cache si Branch-uri
-- **drefs_haswell_ucsx.png**: Confirma ca numarul total de referinte la 
-  memorie e absolut identic intre masini (logic, e fix acelasi cod rulat).
-- **misses_arhitecturi_n400.png**: Chiar daca fac aceleasi accese, acest 
-  grafic arata ca per total (L1 si L3), nodul UCSX inregistreaza un numar 
-  mai mic de rateuri.
-- **d1_miss_comparatie_noduri.png**: Facand zoom strict pe memoria L1, se 
-  vede clar ca UCSX are un prefetcher mai bun. Pentru opt_m avem 705k 
-  rateuri pe UCSX fata de 781k pe Haswell.
-- **rate_comparatie_arhitecturi.png**: Super interesant aici: branch 
-  predictorul greseste fix la fel pe ambele (8% la opt_m). In schimb, UCSX
-  absoarbe mai bine accesele urate din neopt, scazand miss rate-ul de la 
-  6.7% la 5.4%.
+The generated Cachegrind logs for the optimized version report:
 
+- **Haswell:** 781,524 D1 misses.
+- **UCSX:** 705,909 D1 misses.
+- The reported miss rate decreases from approximately 0.18% to 0.14%.
+
+The original analysis interprets these differences as a possible advantage in cache behavior on UCSX, potentially involving cache configuration or prefetching. The logs alone do not establish which hardware mechanism causes the difference. Instruction references remain approximately the same, at 1.4 billion.
+
+## Plots and execution times
+
+Tests cover matrix sizes from N = 400 to N = 1800. The original analysis discusses the following 13 plots. Plot filenames are preserved.
+
+### 1. Overall performance and scalability
+
+- **timpi_neopt_blas_opt.png:** at N = 1200, the baseline takes approximately 13.6 s, the manually optimized version approximately 3.5 s, and BLAS approximately 0.17 s.
+- **scalare_opt_m.png:** the optimized version exhibits the expected O(N^3) scaling, increasing from approximately 0.15 s to 11.6 s for the largest matrix.
+
+### 2. Memory and instruction analysis
+
+- **acces_memorie_drefs.png:** at N = 400, the baseline performs almost 2 billion memory references. Local pointers and other optimizations reduce this to approximately 471 million.
+- **misses_l1_l3_variante.png:** L1 misses decrease from approximately 132 million in the baseline to fewer than 1 million in the optimized version.
+- **rate_miss_si_branch.png:** L1 miss rate drops from 6.7% to 0.2%, while branch misprediction rate increases from 0.3% to approximately 8%. Overall execution time still improves.
+
+### 3. Bonus: execution times on Haswell and UCSX
+
+Tests were also run on the UCSX queue to compare the systems.
+
+- **arhitecturi_timpi_global.png:** the line plot shows lower execution times on UCSX for all implementations and tested matrix sizes.
+- **arhitecturi_grupate_n.png:** at N = 1800, the baseline decreases from approximately 50 s on Haswell to approximately 37 s on UCSX.
+- **optimizat_haswell_vs_ucsx.png:** the optimized version takes approximately 8.6 s on UCSX versus 11.9 s on Haswell at N = 1800.
+- **speedup_ucsx_opt_m.png:** from N = 1200 onward, the optimized version's UCSX speedup is approximately 1.35x to 1.39x.
+
+### 4. Bonus: cache and branch comparisons
+
+- **drefs_haswell_ucsx.png:** total memory-reference counts are identical across systems for the same code.
+- **misses_arhitecturi_n400.png:** UCSX reports fewer misses overall in L1 and L3.
+- **d1_miss_comparatie_noduri.png:** the optimized version has approximately 705 thousand L1 misses on UCSX versus 781 thousand on Haswell. The original analysis suggests prefetching as a possible explanation, rather than a measured hardware property.
+- **rate_comparatie_arhitecturi.png:** branch misprediction is approximately 8% for the optimized version on both systems. For the baseline, the reported cache miss rate decreases from 6.7% on Haswell to 5.4% on UCSX.
